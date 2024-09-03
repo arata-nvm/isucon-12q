@@ -1215,21 +1215,21 @@ func playerHandler(c echo.Context) error {
 		}
 		return fmt.Errorf("error retrievePlayer: %w", err)
 	}
-	competition_ids := []string{}
+	competitionIds := []string{}
 	if err := tenantDB.SelectContext(
 		ctx,
-		&competition_ids,
+		&competitionIds,
 		"SELECT id FROM competition WHERE tenant_id = ? ORDER BY created_at ASC",
 		v.tenantID,
 	); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("error Select competition: %w", err)
 	}
 
-	query := "SELECT * FROM player_score WHERE tenant_id = :tenant_id AND competition_id IN (:competition_ids) AND player_id = (:player_id) ORDER BY row_num DESC"
+	query := "SELECT * FROM player_score WHERE tenant_id = :tenant_id AND competition_id IN (:competition_ids) AND player_id = :player_id ORDER BY row_num DESC"
 	query, args, err := sqlx.Named(query, map[string]interface{}{
-		"tenant_id":      v.tenantID,
-		"player_id":      p.ID,
-		"competition_id": competition_ids,
+		"tenant_id":       v.tenantID,
+		"player_id":       p.ID,
+		"competition_ids": competitionIds,
 	})
 	if err != nil {
 		return fmt.Errorf("error sqlx.Named: %w", err)
@@ -1240,7 +1240,7 @@ func playerHandler(c echo.Context) error {
 	}
 	query = tenantDB.Rebind(query)
 
-	pss := make([]PlayerScoreRow, 0, len(competition_ids))
+	pss := make([]PlayerScoreRow, 0, len(competitionIds))
 	err = tenantDB.SelectContext(ctx, &pss, query, args...)
 	if err != nil {
 		return fmt.Errorf("error Select player_score: %w", err)
