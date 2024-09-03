@@ -1103,7 +1103,7 @@ func competitionScoreHandler(c echo.Context) error {
 		playerScoreRows,
 	); err != nil {
 		return fmt.Errorf(
-			"error Insert player_score",
+			"error Insert player_score: %w", err,
 		)
 	}
 
