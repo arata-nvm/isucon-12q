@@ -822,7 +822,7 @@ func playersAddHandler(c echo.Context) error {
 
 	if _, err := tenantDB.ExecContext(
 		ctx,
-		"INSERT INTO player (id, tenant_id, display_name, is_disqualified, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+		"INSERT INTO player (id, tenant_id, display_name, is_disqualified, created_at, updated_at) VALUES (:id, :tenant_id, :display_name, :is_disqualified, :created_at, :updated_at)",
 		playerRows,
 	); err != nil {
 		return fmt.Errorf(
