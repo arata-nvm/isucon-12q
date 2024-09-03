@@ -18,7 +18,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/go-sql-driver/mysql"
@@ -1097,14 +1096,6 @@ func competitionScoreHandler(c echo.Context) error {
 		})
 	}
 
-	rankingCacheMutex.Lock()
-	rankingCacheKey := rankingCacheKey{
-		tenantID:      v.tenantID,
-		competitionID: competitionID,
-	}
-	delete(rankingCache, rankingCacheKey)
-	rankingCacheMutex.Unlock()
-
 	if _, err := tenantDB.ExecContext(
 		ctx,
 		"DELETE FROM player_score WHERE tenant_id = ? AND competition_id = ?",
@@ -1301,14 +1292,6 @@ type CompetitionRankingHandlerResult struct {
 	Ranks       []CompetitionRank `json:"ranks"`
 }
 
-type rankingCacheKey struct {
-	tenantID      int64
-	competitionID string
-}
-
-var rankingCacheMutex sync.Mutex
-var rankingCache map[rankingCacheKey][]CompetitionRank = make(map[rankingCacheKey][]CompetitionRank)
-
 // 参加者向けAPI
 // GET /api/player/competition/:competition_id/ranking
 // 大会ごとのランキングを取得する
@@ -1346,14 +1329,6 @@ func competitionRankingHandler(c echo.Context) error {
 		return fmt.Errorf("error retrieveCompetition: %w", err)
 	}
 
-	var rankAfter int64
-	rankAfterStr := c.QueryParam("rank_after")
-	if rankAfterStr != "" {
-		if rankAfter, err = strconv.ParseInt(rankAfterStr, 10, 64); err != nil {
-			return fmt.Errorf("error strconv.ParseUint: rankAfterStr=%s, %w", rankAfterStr, err)
-		}
-	}
-
 	now := time.Now().Unix()
 	var tenant TenantRow
 	if err := adminDB.GetContext(ctx, &tenant, "SELECT * FROM tenant WHERE id = ?", v.tenantID); err != nil {
@@ -1371,56 +1346,50 @@ func competitionRankingHandler(c echo.Context) error {
 		)
 	}
 
-	var ranks []CompetitionRank
-
-	rankingCacheKey := rankingCacheKey{
-		tenantID:      v.tenantID,
-		competitionID: competitionID,
+	var rankAfter int64
+	rankAfterStr := c.QueryParam("rank_after")
+	if rankAfterStr != "" {
+		if rankAfter, err = strconv.ParseInt(rankAfterStr, 10, 64); err != nil {
+			return fmt.Errorf("error strconv.ParseUint: rankAfterStr=%s, %w", rankAfterStr, err)
+		}
 	}
-	rankingCacheMutex.Lock()
-	if result, ok := rankingCache[rankingCacheKey]; ok {
-		ranks = result
-	} else {
-		pss := []PlayerScoreRow{}
-		if err := tenantDB.SelectContext(
-			ctx,
-			&pss,
-			"SELECT * FROM player_score WHERE tenant_id = ? AND competition_id = ? ORDER BY row_num DESC",
-			tenant.ID,
-			competitionID,
-		); err != nil {
-			return fmt.Errorf("error Select player_score: tenantID=%d, competitionID=%s, %w", tenant.ID, competitionID, err)
+
+	pss := []PlayerScoreRow{}
+	if err := tenantDB.SelectContext(
+		ctx,
+		&pss,
+		"SELECT * FROM player_score WHERE tenant_id = ? AND competition_id = ? ORDER BY row_num DESC",
+		tenant.ID,
+		competitionID,
+	); err != nil {
+		return fmt.Errorf("error Select player_score: tenantID=%d, competitionID=%s, %w", tenant.ID, competitionID, err)
+	}
+	ranks := make([]CompetitionRank, 0, len(pss))
+	scoredPlayerSet := make(map[string]struct{}, len(pss))
+	for _, ps := range pss {
+		// player_scoreが同一player_id内ではrow_numの降順でソートされているので
+		// 現れたのが2回目以降のplayer_idはより大きいrow_numでスコアが出ているとみなせる
+		if _, ok := scoredPlayerSet[ps.PlayerID]; ok {
+			continue
 		}
-		ranks := make([]CompetitionRank, 0, len(pss))
-		scoredPlayerSet := make(map[string]struct{}, len(pss))
-		for _, ps := range pss {
-			// player_scoreが同一player_id内ではrow_numの降順でソートされているので
-			// 現れたのが2回目以降のplayer_idはより大きいrow_numでスコアが出ているとみなせる
-			if _, ok := scoredPlayerSet[ps.PlayerID]; ok {
-				continue
-			}
-			scoredPlayerSet[ps.PlayerID] = struct{}{}
-			p, err := retrievePlayer(ctx, tenantDB, ps.PlayerID)
-			if err != nil {
-				return fmt.Errorf("error retrievePlayer: %w", err)
-			}
-			ranks = append(ranks, CompetitionRank{
-				Score:             ps.Score,
-				PlayerID:          p.ID,
-				PlayerDisplayName: p.DisplayName,
-				RowNum:            ps.RowNum,
-			})
+		scoredPlayerSet[ps.PlayerID] = struct{}{}
+		p, err := retrievePlayer(ctx, tenantDB, ps.PlayerID)
+		if err != nil {
+			return fmt.Errorf("error retrievePlayer: %w", err)
 		}
-		sort.Slice(ranks, func(i, j int) bool {
-			if ranks[i].Score == ranks[j].Score {
-				return ranks[i].RowNum < ranks[j].RowNum
-			}
-			return ranks[i].Score > ranks[j].Score
+		ranks = append(ranks, CompetitionRank{
+			Score:             ps.Score,
+			PlayerID:          p.ID,
+			PlayerDisplayName: p.DisplayName,
+			RowNum:            ps.RowNum,
 		})
-		rankingCache[rankingCacheKey] = ranks
 	}
-	rankingCacheMutex.Unlock()
-
+	sort.Slice(ranks, func(i, j int) bool {
+		if ranks[i].Score == ranks[j].Score {
+			return ranks[i].RowNum < ranks[j].RowNum
+		}
+		return ranks[i].Score > ranks[j].Score
+	})
 	pagedRanks := make([]CompetitionRank, 0, 100)
 	for i, rank := range ranks {
 		if int64(i) < rankAfter {
