@@ -107,7 +107,7 @@ func dispenseID(_ context.Context) (string, error) {
 		return "", err
 	}
 
-	i := int64(binary.LittleEndian.Uint64(b[:]))
+	i := uint64(binary.LittleEndian.Uint64(b[:]))
 	return fmt.Sprintf("%x", i), nil
 }
 
