@@ -2,7 +2,9 @@ package isuports
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/binary"
 	"encoding/csv"
 	"errors"
 	"fmt"
@@ -20,7 +22,6 @@ import (
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/gofrs/flock"
-	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
 	"github.com/kaz/pprotein/integration/echov4"
 	"github.com/labstack/echo/v4"
@@ -101,7 +102,13 @@ func createTenantDB(id int64) error {
 
 // システム全体で一意なIDを生成する
 func dispenseID(_ context.Context) (string, error) {
-	return uuid.NewString(), nil
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+
+	i := int64(binary.LittleEndian.Uint64(b[:]))
+	return fmt.Sprintf("%x", i), nil
 }
 
 // 全APIにCache-Control: privateを設定する
