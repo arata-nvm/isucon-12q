@@ -1215,45 +1215,46 @@ func playerHandler(c echo.Context) error {
 		}
 		return fmt.Errorf("error retrievePlayer: %w", err)
 	}
-	cs := []CompetitionRow{}
+	competition_ids := []string{}
 	if err := tenantDB.SelectContext(
 		ctx,
-		&cs,
-		"SELECT * FROM competition WHERE tenant_id = ? ORDER BY created_at ASC",
+		&competition_ids,
+		"SELECT id FROM competition WHERE tenant_id = ? ORDER BY created_at ASC",
 		v.tenantID,
 	); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("error Select competition: %w", err)
 	}
 
-	// player_scoreを読んでいるときに更新が走ると不整合が起こるのでロックを取得する
-	fl, err := flockByTenantID(v.tenantID)
+	query := "SELECT * FROM player_score WHERE tenant_id = :tenant_id AND competition_id IN (:competition_ids) AND player_id = (:player_id) ORDER BY row_num DESC"
+	query, args, err := sqlx.Named(query, map[string]interface{}{
+		"tenant_id":      v.tenantID,
+		"player_id":      p.ID,
+		"competition_id": competition_ids,
+	})
 	if err != nil {
-		return fmt.Errorf("error flockByTenantID: %w", err)
+		return fmt.Errorf("error sqlx.Named: %w", err)
 	}
-	defer fl.Close()
-	pss := make([]PlayerScoreRow, 0, len(cs))
-	for _, c := range cs {
-		ps := PlayerScoreRow{}
-		if err := tenantDB.GetContext(
-			ctx,
-			&ps,
-			// 最後にCSVに登場したスコアを採用する = row_numが一番大きいもの
-			"SELECT * FROM player_score WHERE tenant_id = ? AND competition_id = ? AND player_id = ? ORDER BY row_num DESC LIMIT 1",
-			v.tenantID,
-			c.ID,
-			p.ID,
-		); err != nil {
-			// 行がない = スコアが記録されてない
-			if errors.Is(err, sql.ErrNoRows) {
-				continue
-			}
-			return fmt.Errorf("error Select player_score: tenantID=%d, competitionID=%s, playerID=%s, %w", v.tenantID, c.ID, p.ID, err)
-		}
-		pss = append(pss, ps)
+	query, args, err = sqlx.In(query, args...)
+	if err != nil {
+		return fmt.Errorf("error sqlx.In: %w", err)
 	}
+	query = tenantDB.Rebind(query)
+
+	pss := make([]PlayerScoreRow, 0, len(competition_ids))
+	err = tenantDB.SelectContext(ctx, &pss, query, args...)
+	if err != nil {
+		return fmt.Errorf("error Select player_score: %w", err)
+	}
+
+	competitionIdMap := make(map[string]bool)
 
 	psds := make([]PlayerScoreDetail, 0, len(pss))
 	for _, ps := range pss {
+		if competitionIdMap[ps.CompetitionID] {
+			continue
+		}
+		competitionIdMap[ps.CompetitionID] = true
+
 		comp, err := retrieveCompetition(ctx, tenantDB, ps.CompetitionID)
 		if err != nil {
 			return fmt.Errorf("error retrieveCompetition: %w", err)
